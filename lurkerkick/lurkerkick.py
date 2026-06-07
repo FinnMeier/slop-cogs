@@ -98,16 +98,20 @@ class LurkerKick(commands.Cog):
 
             last_active_ts = await self.config.member(member).last_active()
 
-            if last_active_ts is None:
-                join_time = member.joined_at
-                if join_time and join_time.tzinfo is None:
-                    join_time = join_time.replace(tzinfo=timezone.utc)
+            join_time = member.joined_at
+            if join_time and join_time.tzinfo is None:
+                join_time = join_time.replace(tzinfo=timezone.utc)
 
+            if last_active_ts is None:
                 effective_last_active = tracking_started_time
                 if join_time and join_time > effective_last_active:
                     effective_last_active = join_time
             else:
                 effective_last_active = datetime.fromtimestamp(last_active_ts, tz=timezone.utc)
+                # Decision: If the user rejoined AFTER their last recorded message, their effective activity
+                # time should reset to their join time. This prevents instantly kicking rejoining users.
+                if join_time and join_time > effective_last_active:
+                    effective_last_active = join_time
 
             delta = now - effective_last_active
 
@@ -145,6 +149,7 @@ class LurkerKick(commands.Cog):
         log_channel = guild.get_channel(log_channel_id) if log_channel_id else None
 
         kicked_users = []
+        failed_users = []
 
         inactive_users = users_to_kick if users_to_kick is not None else await self._get_inactive_users(guild)
 
@@ -163,20 +168,31 @@ class LurkerKick(commands.Cog):
             except discord.Forbidden:
                 # Bot lacks permissions to kick this user
                 log.error(f"Failed to kick {member.id} from {guild.id} - Missing permissions")
+                failed_users.append(f"{member.name}#{member.discriminator} ({member.id}) - Missing permissions")
             except discord.HTTPException as e:
                 log.error(f"Failed to kick {member.id} from {guild.id} - HTTP Exception: {e}")
+                failed_users.append(f"{member.name}#{member.discriminator} ({member.id}) - HTTP Exception: {e}")
 
         # Log results
-        if log_channel and kicked_users:
-            message = f"**LurkerKick Purge**\nKicked {len(kicked_users)} inactive users:\n"
-            for user_str in kicked_users:
-                message += f"- {user_str}\n"
+        if log_channel and (kicked_users or failed_users):
+            message = "**LurkerKick Purge**\n"
+            if kicked_users:
+                message += f"Kicked {len(kicked_users)} inactive users:\n"
+                for user_str in kicked_users:
+                    message += f"- {user_str}\n"
+
+            if failed_users:
+                message += f"\nFailed to kick {len(failed_users)} users:\n"
+                for user_str in failed_users:
+                    message += f"- {user_str}\n"
 
             for page in pagify(message):
                 try:
                     await log_channel.send(page)
                 except discord.Forbidden:
                     break
+
+        return kicked_users, failed_users
 
     @commands.Cog.listener()
     async def on_guild_join(self, guild: discord.Guild):
@@ -351,5 +367,18 @@ class LurkerKick(commands.Cog):
             return await ctx.send("Manual lurker kick process cancelled.")
 
         await ctx.send("Running lurker kick process manually...")
-        await self._process_guild(ctx.guild, manual=True, users_to_kick=inactive_users)
-        await ctx.send("Manual process complete. Check the log channel (if configured) for details.")
+        kicked_users, failed_users = await self._process_guild(ctx.guild, manual=True, users_to_kick=inactive_users)
+
+        summary = "Manual process complete. Check the log channel (if configured) for details.\n"
+        if failed_users:
+            summary += f"\n**Warning:** Failed to kick {len(failed_users)} users (likely due to missing permissions or hierarchy). Check logs for details."
+
+            # Show the first few failures directly to the user in the channel
+            fail_list = "\n".join(f"- {f}" for f in failed_users[:5])
+            if len(failed_users) > 5:
+                fail_list += f"\n... and {len(failed_users) - 5} more."
+
+            for page in pagify(f"{summary}\n\n**Failed Kicks:**\n{fail_list}"):
+                await ctx.send(page)
+        else:
+            await ctx.send(summary)
