@@ -29,7 +29,8 @@ class LurkerKick(commands.Cog):
             "tracking_started": None, # Timestamp when tracking started for the guild to ensure we don't kick early
             "dm_on_kick": False,   # Whether to DM users when they are kicked
             "test_mode": False,    # Whether test mode is active
-            "test_inactivity_minutes": 5 # Default test mode inactivity minutes
+            "test_inactivity_minutes": 5, # Default test mode inactivity minutes
+            "dm_message": "You have been kicked from {guild_name} due to inactivity ({duration} {unit} without a message)." # Default DM message
         }
 
         default_member = {
@@ -139,6 +140,7 @@ class LurkerKick(commands.Cog):
         log_channel_id = settings["log_channel"]
         tracking_started = settings["tracking_started"]
         dm_on_kick = settings["dm_on_kick"]
+        dm_message = settings["dm_message"]
 
         # Decision: Ensure we don't kick anyone before we have tracked them for at least the inactivity period.
         # Otherwise, we'd immediately kick everyone who hasn't sent a message since the cog was loaded!
@@ -158,10 +160,23 @@ class LurkerKick(commands.Cog):
                 # Decision: Try to DM the user reasoning before kick as requested
                 if dm_on_kick:
                     try:
-                        await member.send(f"You have been kicked from {guild.name} due to inactivity ({duration} {unit} without a message).")
+                        formatted_message = dm_message.format(
+                            guild_name=guild.name,
+                            duration=duration,
+                            unit=unit,
+                            user_name=member.name
+                        )
+                        await member.send(formatted_message)
                     except discord.Forbidden:
                         # Cannot DM user
                         pass
+                    except (KeyError, ValueError, IndexError) as e:
+                        # Fallback if they used an invalid format variable or syntax
+                        log.error(f"Invalid format string or variable in custom DM message: {e}")
+                        try:
+                            await member.send(f"You have been kicked from {guild.name} due to inactivity ({duration} {unit} without a message).")
+                        except discord.Forbidden:
+                            pass
 
                 await guild.kick(member, reason=f"LurkerKick: Inactive for {duration} {unit}")
                 kicked_users.append(f"{member.name}#{member.discriminator} ({member.id}) - {duration} {unit} inactive")
@@ -268,6 +283,28 @@ class LurkerKick(commands.Cog):
             await ctx.send("DMing users before kick has been **enabled**.")
 
     @lurkerkick.command()
+    async def setdm(self, ctx, *, message: str):
+        """
+        Set a custom DM message to send to users before they are kicked.
+
+        Available variables to use in the message:
+        `{guild_name}` - The name of the server
+        `{duration}` - The number of days/minutes inactive
+        `{unit}` - "days" or "minutes" depending on settings
+        `{user_name}` - The name of the user being kicked
+
+        Example: `[p]lurkerkick setdm Hi {user_name}, you have been kicked from {guild_name} because you were inactive for {duration} {unit}.`
+        """
+        await self.config.guild(ctx.guild).dm_message.set(message)
+        await ctx.send("The custom DM message has been set.")
+
+    @lurkerkick.command()
+    async def resetdm(self, ctx):
+        """Reset the DM message to the default value."""
+        await self.config.guild(ctx.guild).dm_message.clear()
+        await ctx.send("The DM message has been reset to the default.")
+
+    @lurkerkick.command()
     async def setdays(self, ctx, days: int):
         """Set the number of days of inactivity before a user is kicked."""
         if days < 1:
@@ -319,6 +356,7 @@ class LurkerKick(commands.Cog):
             started_time = "Never"
 
         dm_on_kick_status = "Enabled" if settings["dm_on_kick"] else "Disabled"
+        dm_message = settings["dm_message"]
 
         msg = (
             f"**LurkerKick Settings for {ctx.guild.name}**\n"
@@ -327,6 +365,7 @@ class LurkerKick(commands.Cog):
             f"Test Mode: **{test_mode_status}** ({test_mins} minutes)\n"
             f"Log Channel: **{channel_str}**\n"
             f"DM Users on Kick: **{dm_on_kick_status}**\n"
+            f"DM Message: `{dm_message}`\n"
             f"Ignored Roles: {roles_str}\n"
             f"Tracking Started: {started_time}\n"
         )
