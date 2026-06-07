@@ -27,7 +27,9 @@ class LurkerKick(commands.Cog):
             "log_channel": None,   # Channel ID for logging kicks
             "is_active": False,    # Whether the background task is running for this guild
             "tracking_started": None, # Timestamp when tracking started for the guild to ensure we don't kick early
-            "dm_on_kick": False    # Whether to DM users when they are kicked
+            "dm_on_kick": False,   # Whether to DM users when they are kicked
+            "test_mode": False,    # Whether test mode is active
+            "test_inactivity_minutes": 5 # Default test mode inactivity minutes
         }
 
         default_member = {
@@ -67,12 +69,14 @@ class LurkerKick(commands.Cog):
 
     async def _get_inactive_users(self, guild: discord.Guild):
         """
-        Returns a list of tuples (member, days_inactive) for users who are inactive
+        Returns a list of tuples (member, duration, unit) for users who are inactive
         based on the guild's current settings.
         """
         settings = await self.config.guild(guild).all()
 
         inactivity_days = settings["inactivity_days"]
+        test_mode = settings.get("test_mode", False)
+        test_inactivity_minutes = settings.get("test_inactivity_minutes", 5)
         excluded_roles = settings["excluded_roles"]
         tracking_started = settings["tracking_started"]
 
@@ -105,10 +109,16 @@ class LurkerKick(commands.Cog):
             else:
                 effective_last_active = datetime.fromtimestamp(last_active_ts, tz=timezone.utc)
 
-            days_inactive = (now - effective_last_active).days
+            delta = now - effective_last_active
 
-            if days_inactive >= inactivity_days:
-                inactive_users.append((member, days_inactive))
+            if test_mode:
+                minutes_inactive = int(delta.total_seconds() / 60)
+                if minutes_inactive >= test_inactivity_minutes:
+                    inactive_users.append((member, minutes_inactive, "minutes"))
+            else:
+                days_inactive = delta.days
+                if days_inactive >= inactivity_days:
+                    inactive_users.append((member, days_inactive, "days"))
 
         return inactive_users
 
@@ -138,18 +148,18 @@ class LurkerKick(commands.Cog):
 
         inactive_users = users_to_kick if users_to_kick is not None else await self._get_inactive_users(guild)
 
-        for member, days_inactive in inactive_users:
+        for member, duration, unit in inactive_users:
             try:
                 # Decision: Try to DM the user reasoning before kick as requested
                 if dm_on_kick:
                     try:
-                        await member.send(f"You have been kicked from {guild.name} due to inactivity ({days_inactive} days without a message).")
+                        await member.send(f"You have been kicked from {guild.name} due to inactivity ({duration} {unit} without a message).")
                     except discord.Forbidden:
                         # Cannot DM user
                         pass
 
-                await guild.kick(member, reason=f"LurkerKick: Inactive for {days_inactive} days")
-                kicked_users.append(f"{member.name}#{member.discriminator} ({member.id}) - {days_inactive} days inactive")
+                await guild.kick(member, reason=f"LurkerKick: Inactive for {duration} {unit}")
+                kicked_users.append(f"{member.name}#{member.discriminator} ({member.id}) - {duration} {unit} inactive")
             except discord.Forbidden:
                 # Bot lacks permissions to kick this user
                 log.error(f"Failed to kick {member.id} from {guild.id} - Missing permissions")
@@ -194,6 +204,28 @@ class LurkerKick(commands.Cog):
     async def lurkerkick(self, ctx):
         """Configure the LurkerKick cog."""
         pass
+
+    @lurkerkick.command()
+    async def testmode(self, ctx, minutes: int = None):
+        """
+        Toggle test mode. If minutes are provided, test mode is enabled with that threshold.
+        If test mode is enabled, it checks inactivity in minutes instead of days.
+        """
+        if minutes is not None:
+            if minutes < 1:
+                return await ctx.send("Minutes must be at least 1.")
+            await self.config.guild(ctx.guild).test_mode.set(True)
+            await self.config.guild(ctx.guild).test_inactivity_minutes.set(minutes)
+            await ctx.send(f"Test mode **enabled** with inactivity threshold set to **{minutes} minutes**.")
+        else:
+            is_test_mode = await self.config.guild(ctx.guild).test_mode()
+            if is_test_mode:
+                await self.config.guild(ctx.guild).test_mode.set(False)
+                await ctx.send("Test mode **disabled**. Reverting to standard days-based checks.")
+            else:
+                await self.config.guild(ctx.guild).test_mode.set(True)
+                minutes = await self.config.guild(ctx.guild).test_inactivity_minutes()
+                await ctx.send(f"Test mode **enabled** with inactivity threshold set to **{minutes} minutes**.")
 
     @lurkerkick.command()
     async def toggle(self, ctx):
@@ -256,6 +288,8 @@ class LurkerKick(commands.Cog):
 
         active_status = "Enabled" if settings["is_active"] else "Disabled"
         days = settings["inactivity_days"]
+        test_mode_status = "Enabled" if settings.get("test_mode", False) else "Disabled"
+        test_mins = settings.get("test_inactivity_minutes", 5)
         channel_id = settings["log_channel"]
         channel_str = f"<#{channel_id}>" if channel_id else "None"
 
@@ -274,6 +308,7 @@ class LurkerKick(commands.Cog):
             f"**LurkerKick Settings for {ctx.guild.name}**\n"
             f"Status: **{active_status}**\n"
             f"Inactivity Threshold: **{days} days**\n"
+            f"Test Mode: **{test_mode_status}** ({test_mins} minutes)\n"
             f"Log Channel: **{channel_str}**\n"
             f"DM Users on Kick: **{dm_on_kick_status}**\n"
             f"Ignored Roles: {roles_str}\n"
@@ -294,8 +329,8 @@ class LurkerKick(commands.Cog):
             return await ctx.send("There are currently no inactive users to kick.")
 
         message = f"**Users to be kicked ({len(inactive_users)}):**\n"
-        for member, days_inactive in inactive_users:
-            message += f"- {member.name}#{member.discriminator} ({member.id}) - {days_inactive} days inactive\n"
+        for member, duration, unit in inactive_users:
+            message += f"- {member.name}#{member.discriminator} ({member.id}) - {duration} {unit} inactive\n"
 
         for page in pagify(message):
             await ctx.send(page)
