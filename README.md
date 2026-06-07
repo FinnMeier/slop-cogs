@@ -15,17 +15,21 @@ Please refer to the [LurkerKick README](./lurkerkick/README.md) for full install
 
 ## Installation
 
-To install these cogs on your Red-DiscordBot instance, you can use the built-in downloader cog to add this repository as a source. Assuming you have the `Downloader` cog loaded:
+To install these cogs on your Red-DiscordBot instance, you can use the built-in downloader cog to add this repository as a source.
 
-1. Add the repo:
+1. Ensure the `Downloader` cog is loaded:
+   ```
+   [p]load downloader
+   ```
+2. Add the repo:
    ```
    [p]repo add cogs https://github.com/FinnMeier/cogs
    ```
-2. Install a specific cog:
+3. Install a specific cog:
    ```
    [p]cog install cogs lurkerkick
    ```
-3. Load the cog:
+4. Load the cog:
    ```
    [p]load lurkerkick
    ```

@@ -2,7 +2,7 @@
 
 LurkerKick is a cog for [Red-DiscordBot V3](https://github.com/Cog-Creators/Red-DiscordBot) that automatically or manually kicks inactive users (lurkers) from your server.
 
-By default, Discord does not tell bots when a user last sent a message. This cog tracks messages from the moment it is enabled to determine user activity, kicking those who do not speak for a configurable number of days.
+By default, Discord does not tell bots when a user last sent a message. This cog tracks messages from the moment it is loaded to determine user activity, kicking those who do not speak for a configurable number of days.
 
 ## Features
 - **Configurable Timeframe**: Set how many days a user can be inactive before being kicked (default is 30 days).
@@ -45,4 +45,4 @@ All commands require Administrator permissions.
 
 ## Important Note
 
-Because Discord does not provide historical message data without scanning every channel (which is extremely resource-intensive), this cog relies on tracking messages *after* it has been enabled. This means if you set the inactivity threshold to 30 days, the bot will not kick anyone until 30 days have passed since you enabled the cog using `[p]lurkerkick toggle`.
+Because Discord does not provide historical message data without scanning every channel (which is extremely resource-intensive), this cog relies on tracking messages. Tracking begins globally for all servers as soon as the cog is loaded on your bot. This means if you set the inactivity threshold to 30 days, the bot will not kick anyone until 30 days have passed since the cog was first loaded or joined your server. You can safely keep `[p]lurkerkick toggle` disabled and manually use `[p]lurkerkick runnow` once the inactivity period has passed.

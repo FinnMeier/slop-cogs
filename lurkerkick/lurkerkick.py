@@ -37,11 +37,22 @@ class LurkerKick(commands.Cog):
         self.config.register_guild(**default_guild)
         self.config.register_member(**default_member)
 
-        # Decision: Use a background task running every 24 hours (a common global default period)
-        # to check for inactive users and kick them if they exceed the threshold.
+        # Start background tasks
+        self.init_task = self.bot.loop.create_task(self._initialize_tracking())
         self.lurker_check.start()
 
+    async def _initialize_tracking(self):
+        """Initialize tracking_started for all guilds globally upon load."""
+        await self.bot.wait_until_red_ready()
+        now = datetime.now(timezone.utc).timestamp()
+        for guild in self.bot.guilds:
+            started = await self.config.guild(guild).tracking_started()
+            if started is None:
+                await self.config.guild(guild).tracking_started.set(now)
+
     def cog_unload(self):
+        if hasattr(self, 'init_task'):
+            self.init_task.cancel()
         self.lurker_check.cancel()
 
     @tasks.loop(hours=24)
@@ -158,6 +169,14 @@ class LurkerKick(commands.Cog):
                     break
 
     @commands.Cog.listener()
+    async def on_guild_join(self, guild: discord.Guild):
+        """Start tracking for new guilds when the bot joins them."""
+        started = await self.config.guild(guild).tracking_started()
+        if started is None:
+            now = datetime.now(timezone.utc).timestamp()
+            await self.config.guild(guild).tracking_started.set(now)
+
+    @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
         """Listener to track when users send messages."""
         if message.author.bot or message.guild is None:
@@ -186,16 +205,7 @@ class LurkerKick(commands.Cog):
             await ctx.send("Automatic lurker kicking has been **disabled**.")
         else:
             await self.config.guild(ctx.guild).is_active.set(True)
-            # If tracking never started, start it now
-            started = await self.config.guild(ctx.guild).tracking_started()
-            if started is None:
-                await self.config.guild(ctx.guild).tracking_started.set(datetime.now(timezone.utc).timestamp())
-                await ctx.send(f"Automatic lurker kicking has been **enabled**.\n\n"
-                               f"**IMPORTANT:** Because the bot just started tracking messages on this server, "
-                               f"it will wait until the full inactivity period has passed before kicking anyone "
-                               f"who hasn't sent a message.")
-            else:
-                await ctx.send("Automatic lurker kicking has been **enabled**.")
+            await ctx.send("Automatic lurker kicking has been **enabled**.")
 
     @lurkerkick.command()
     async def dmtoggle(self, ctx):
@@ -274,14 +284,9 @@ class LurkerKick(commands.Cog):
     @lurkerkick.command()
     async def runnow(self, ctx):
         """Manually trigger the lurker kick process for this server right now."""
-        # Decision: Ensure tracking started so we don't accidentally kick everyone.
         started = await self.config.guild(ctx.guild).tracking_started()
         if started is None:
-            # We haven't started tracking, we cannot safely run now.
-            # But what if they never toggled it on, but still want to run manually?
-            # We MUST track time so we know who is inactive. Since discord doesn't give us
-            # "last message sent", we cannot reliably kick without first observing.
-            return await ctx.send("Cannot run manually because message tracking has not started. Please enable the cog using `[p]lurkerkick toggle` to begin tracking messages.")
+            return await ctx.send("Message tracking is still initializing. Please try again in a moment.")
 
         inactive_users = await self._get_inactive_users(ctx.guild)
 
