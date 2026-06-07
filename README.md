@@ -19,11 +19,11 @@ To install these cogs on your Red-DiscordBot instance, you can use the built-in 
 
 1. Add the repo:
    ```
-   [p]repo add custom-cogs https://github.com/FinnMeier/cogs
+   [p]repo add cogs https://github.com/FinnMeier/cogs
    ```
 2. Install a specific cog:
    ```
-   [p]cog install custom-cogs lurkerkick
+   [p]cog install cogs lurkerkick
    ```
 3. Load the cog:
    ```
