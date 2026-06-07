@@ -1,3 +1,4 @@
+import asyncio
 import discord
 from redbot.core import Config, commands, checks
 from redbot.core.utils.chat_formatting import pagify
@@ -52,55 +53,29 @@ class LurkerKick(commands.Cog):
     async def before_lurker_check(self):
         await self.bot.wait_until_red_ready()
 
-    async def _process_guild(self, guild: discord.Guild, manual: bool = False):
+    async def _get_inactive_users(self, guild: discord.Guild):
         """
-        Process a single guild to check for inactive users.
+        Returns a list of tuples (member, days_inactive) for users who are inactive
+        based on the guild's current settings.
         """
         settings = await self.config.guild(guild).all()
 
-        # If not active and not triggered manually, skip
-        if not settings["is_active"] and not manual:
-            return
-
         inactivity_days = settings["inactivity_days"]
         excluded_roles = settings["excluded_roles"]
-        log_channel_id = settings["log_channel"]
         tracking_started = settings["tracking_started"]
 
-        # Decision: Ensure we don't kick anyone before we have tracked them for at least the inactivity period.
-        # Otherwise, we'd immediately kick everyone who hasn't sent a message since the cog was loaded!
         if tracking_started is None:
-            # This shouldn't happen if they turned it on, but just in case.
-            return
+            return []
 
         tracking_started_time = datetime.fromtimestamp(tracking_started, tz=timezone.utc)
-        time_since_tracking = (datetime.now(timezone.utc) - tracking_started_time).days
 
-        if time_since_tracking < inactivity_days:
-            # Not enough time has passed since we started tracking to fairly kick anyone.
-            if manual:
-                pass # Allow manual to bypass this if they really want, or maybe we shouldn't?
-                # Actually, let's keep it safe. If they just installed the bot, nobody has a last_active.
-                # If they do a manual kick, it'll kick everyone. We must enforce this check.
-
-            # log.debug(f"Skipping guild {guild.id} - Tracking only started {time_since_tracking} days ago, need {inactivity_days}.")
-            # return
-            # Wait, if we enforce it, how do they manual kick? We will skip users who don't have a last_active
-            # if we haven't tracked long enough. BUT users who haven't sent a message ever since bot join will just be None.
-            # Decision: To be perfectly safe, anyone with `last_active=None` gets their "last active" treated as the time the bot started tracking.
-            pass
-
-        log_channel = guild.get_channel(log_channel_id) if log_channel_id else None
-
-        kicked_users = []
+        inactive_users = []
         now = datetime.now(timezone.utc)
 
         for member in guild.members:
-            # Decision: Ignore bots and administrators automatically as requested
             if member.bot or member.guild_permissions.administrator:
                 continue
 
-            # Decision: Ignore users with specific roles
             has_excluded_role = any(role.id in excluded_roles for role in member.roles)
             if has_excluded_role:
                 continue
@@ -108,10 +83,7 @@ class LurkerKick(commands.Cog):
             last_active_ts = await self.config.member(member).last_active()
 
             if last_active_ts is None:
-                # User has not sent a message since tracking started
-                # So their "last active" is effectively when tracking started or when they joined, whichever is later.
                 join_time = member.joined_at
-                # joined_at can be naive or aware depending on discord.py version, ensure aware
                 if join_time and join_time.tzinfo is None:
                     join_time = join_time.replace(tzinfo=timezone.utc)
 
@@ -124,22 +96,51 @@ class LurkerKick(commands.Cog):
             days_inactive = (now - effective_last_active).days
 
             if days_inactive >= inactivity_days:
-                # User is inactive!
-                try:
-                    # Decision: Try to DM the user reasoning before kick as requested
-                    try:
-                        await member.send(f"You have been kicked from {guild.name} due to inactivity ({days_inactive} days without a message).")
-                    except discord.Forbidden:
-                        # Cannot DM user
-                        pass
+                inactive_users.append((member, days_inactive))
 
-                    await guild.kick(member, reason=f"LurkerKick: Inactive for {days_inactive} days")
-                    kicked_users.append(f"{member.name}#{member.discriminator} ({member.id}) - {days_inactive} days inactive")
+        return inactive_users
+
+    async def _process_guild(self, guild: discord.Guild, manual: bool = False, users_to_kick: list = None):
+        """
+        Process a single guild to check for inactive users.
+        """
+        settings = await self.config.guild(guild).all()
+
+        # If not active and not triggered manually, skip
+        if not settings["is_active"] and not manual:
+            return
+
+        log_channel_id = settings["log_channel"]
+        tracking_started = settings["tracking_started"]
+
+        # Decision: Ensure we don't kick anyone before we have tracked them for at least the inactivity period.
+        # Otherwise, we'd immediately kick everyone who hasn't sent a message since the cog was loaded!
+        if tracking_started is None:
+            # This shouldn't happen if they turned it on, but just in case.
+            return
+
+        log_channel = guild.get_channel(log_channel_id) if log_channel_id else None
+
+        kicked_users = []
+
+        inactive_users = users_to_kick if users_to_kick is not None else await self._get_inactive_users(guild)
+
+        for member, days_inactive in inactive_users:
+            try:
+                # Decision: Try to DM the user reasoning before kick as requested
+                try:
+                    await member.send(f"You have been kicked from {guild.name} due to inactivity ({days_inactive} days without a message).")
                 except discord.Forbidden:
-                    # Bot lacks permissions to kick this user
-                    log.error(f"Failed to kick {member.id} from {guild.id} - Missing permissions")
-                except discord.HTTPException as e:
-                    log.error(f"Failed to kick {member.id} from {guild.id} - HTTP Exception: {e}")
+                    # Cannot DM user
+                    pass
+
+                await guild.kick(member, reason=f"LurkerKick: Inactive for {days_inactive} days")
+                kicked_users.append(f"{member.name}#{member.discriminator} ({member.id}) - {days_inactive} days inactive")
+            except discord.Forbidden:
+                # Bot lacks permissions to kick this user
+                log.error(f"Failed to kick {member.id} from {guild.id} - Missing permissions")
+            except discord.HTTPException as e:
+                log.error(f"Failed to kick {member.id} from {guild.id} - HTTP Exception: {e}")
 
         # Log results
         if log_channel and kicked_users:
@@ -264,6 +265,33 @@ class LurkerKick(commands.Cog):
             # "last message sent", we cannot reliably kick without first observing.
             return await ctx.send("Cannot run manually because message tracking has not started. Please enable the cog using `[p]lurkerkick toggle` to begin tracking messages.")
 
+        inactive_users = await self._get_inactive_users(ctx.guild)
+
+        if not inactive_users:
+            return await ctx.send("There are currently no inactive users to kick.")
+
+        message = f"**Users to be kicked ({len(inactive_users)}):**\n"
+        for member, days_inactive in inactive_users:
+            message += f"- {member.name}#{member.discriminator} ({member.id}) - {days_inactive} days inactive\n"
+
+        for page in pagify(message):
+            await ctx.send(page)
+
+        await ctx.send("\n**Are you sure you want to kick these users? Reply with `yes` or `no`.**")
+
+        def check(m):
+            return m.author == ctx.author and m.channel == ctx.channel and m.content.lower() in ('yes', 'no')
+
+        try:
+            msg = await self.bot.wait_for('message', check=check, timeout=30.0)
+        except asyncio.TimeoutError:
+            return await ctx.send("Confirmation timed out.")
+        except Exception:
+            return await ctx.send("Confirmation timed out.")
+
+        if msg.content.lower() == 'no':
+            return await ctx.send("Manual lurker kick process cancelled.")
+
         await ctx.send("Running lurker kick process manually...")
-        await self._process_guild(ctx.guild, manual=True)
+        await self._process_guild(ctx.guild, manual=True, users_to_kick=inactive_users)
         await ctx.send("Manual process complete. Check the log channel (if configured) for details.")
