@@ -1,0 +1,11 @@
+{
+    "author": ["Jules"],
+    "name": "LurkerKick",
+    "short": "Kicks inactive users (lurkers) periodically or manually.",
+    "description": "Kicks inactive users (lurkers) periodically or manually. You can configure the inactivity timeframe, excluded roles, and logging channel.",
+    "install_msg": "Thank you for installing LurkerKick. Use `[p]lurkerkick` to view configuration commands.",
+    "min_bot_version": "3.5.0",
+    "tags": ["utility", "moderation", "lurker", "kick", "inactive"],
+    "requirements": [],
+    "end_user_data_statement": "This cog stores the timestamp of the last message sent by a user to track their activity."
+}
