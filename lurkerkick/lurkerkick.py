@@ -26,7 +26,8 @@ class LurkerKick(commands.Cog):
             "excluded_roles": [],  # List of role IDs to ignore
             "log_channel": None,   # Channel ID for logging kicks
             "is_active": False,    # Whether the background task is running for this guild
-            "tracking_started": None # Timestamp when tracking started for the guild to ensure we don't kick early
+            "tracking_started": None, # Timestamp when tracking started for the guild to ensure we don't kick early
+            "dm_on_kick": False    # Whether to DM users when they are kicked
         }
 
         default_member = {
@@ -112,6 +113,7 @@ class LurkerKick(commands.Cog):
 
         log_channel_id = settings["log_channel"]
         tracking_started = settings["tracking_started"]
+        dm_on_kick = settings["dm_on_kick"]
 
         # Decision: Ensure we don't kick anyone before we have tracked them for at least the inactivity period.
         # Otherwise, we'd immediately kick everyone who hasn't sent a message since the cog was loaded!
@@ -128,11 +130,12 @@ class LurkerKick(commands.Cog):
         for member, days_inactive in inactive_users:
             try:
                 # Decision: Try to DM the user reasoning before kick as requested
-                try:
-                    await member.send(f"You have been kicked from {guild.name} due to inactivity ({days_inactive} days without a message).")
-                except discord.Forbidden:
-                    # Cannot DM user
-                    pass
+                if dm_on_kick:
+                    try:
+                        await member.send(f"You have been kicked from {guild.name} due to inactivity ({days_inactive} days without a message).")
+                    except discord.Forbidden:
+                        # Cannot DM user
+                        pass
 
                 await guild.kick(member, reason=f"LurkerKick: Inactive for {days_inactive} days")
                 kicked_users.append(f"{member.name}#{member.discriminator} ({member.id}) - {days_inactive} days inactive")
@@ -195,6 +198,18 @@ class LurkerKick(commands.Cog):
                 await ctx.send("Automatic lurker kicking has been **enabled**.")
 
     @lurkerkick.command()
+    async def dmtoggle(self, ctx):
+        """Toggle whether users are DMed before being kicked for inactivity."""
+        dm_on_kick = await self.config.guild(ctx.guild).dm_on_kick()
+
+        if dm_on_kick:
+            await self.config.guild(ctx.guild).dm_on_kick.set(False)
+            await ctx.send("DMing users before kick has been **disabled**.")
+        else:
+            await self.config.guild(ctx.guild).dm_on_kick.set(True)
+            await ctx.send("DMing users before kick has been **enabled**.")
+
+    @lurkerkick.command()
     async def setdays(self, ctx, days: int):
         """Set the number of days of inactivity before a user is kicked."""
         if days < 1:
@@ -243,11 +258,14 @@ class LurkerKick(commands.Cog):
         else:
             started_time = "Never"
 
+        dm_on_kick_status = "Enabled" if settings["dm_on_kick"] else "Disabled"
+
         msg = (
             f"**LurkerKick Settings for {ctx.guild.name}**\n"
             f"Status: **{active_status}**\n"
             f"Inactivity Threshold: **{days} days**\n"
             f"Log Channel: **{channel_str}**\n"
+            f"DM Users on Kick: **{dm_on_kick_status}**\n"
             f"Ignored Roles: {roles_str}\n"
             f"Tracking Started: {started_time}\n"
         )
