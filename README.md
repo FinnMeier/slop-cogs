@@ -19,7 +19,7 @@ To install these cogs on your Red-DiscordBot instance, you can use the built-in 
 
 1. Add the repo:
    ```
-   [p]repo add custom-cogs <URL-to-this-repo>
+   [p]repo add custom-cogs https://github.com/FinnMeier/cogs
    ```
 2. Install a specific cog:
    ```
