@@ -21,4 +21,4 @@ jobs:
         
     - name: Analysing the code with pylint
       run: |
-        pylint $(git ls-files 'lurkerkick/*.py') || true
+        pylint lurkerkick/ || true
